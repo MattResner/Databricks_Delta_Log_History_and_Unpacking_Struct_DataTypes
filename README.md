@@ -29,3 +29,19 @@ We can use the % fs ls followed by our Databricks FileStore path to see the log 
 ![image](https://github.com/user-attachments/assets/4bf4b792-b072-4721-b5df-e774122e1d27)
 
 ## Opening a delta_log file
+
+Delta log files are stored in the JSON file format. We can open them by using the .read and .json methods. In this example I am opening the 6th log file with the path "/FileStore/tables/TraderJoesRevenue/bronze_tj_fact_revenue/_delta_log/00000000000000000006.json". You could replace this with your relevant file path if following along with a different data set. 
+
+```python
+json1 = spark.read.json("/FileStore/tables/TraderJoesRevenue/bronze_tj_fact_revenue/_delta_log/00000000000000000006.json")
+
+display(json1)
+```
+
+Running the above shows the underlying underlying data in the JSON. Each delta_log file is an assortment of JSON dictionary objects known as Structs as seen below. Each delta log file can contain different structs such as Add, commitInfo, and metaData. 
+
+![image](https://github.com/user-attachments/assets/8c02c1d6-efdd-48ad-82ed-9734fc6e18be)
+
+We are most interested in the timestamp field and SchemaString located in the commitInfo and metaData structs. 
+
+## Extracting values from the delta_log metaData and commitInfo structs
