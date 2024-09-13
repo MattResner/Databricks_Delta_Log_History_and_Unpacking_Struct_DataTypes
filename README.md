@@ -45,3 +45,56 @@ Running the above shows the underlying underlying data in the JSON. Each delta_l
 We are most interested in the timestamp field and SchemaString located in the commitInfo and metaData structs. 
 
 ## Extracting values from the delta_log metaData and commitInfo structs
+
+Before extraction of the desired values from the structs we must first perform some enrichment and transformations on our data. At an enterprise scale, we would want to include a functional module or notebook of this code as part of a pipeline that would write our schema evolution metadata to a central location so that we could monitor schema drift across our bronze layer tables to monitor these changes with our data producers and business stakeholders. 
+
+In order to create an insertable record that would serve this purpose, we add columns for the table name and schema version, as well as self join to allign the schemaInfo and metaData for the same schema version in the same row. 
+
+``` Python
+from pyspark.sql.functions import input_file_name, regexp_extract
+
+spark.read.json("dbfs:/FileStore/tables/TraderJoesRevenue/bronze_tj_fact_revenue/_delta_log/*.json")\
+    .withColumn("table_name", regexp_extract(input_file_name(), r'/tables/TraderJoesRevenue/(.*?)/_delta_log/', 1))\
+    .withColumn("schema_version", regexp_extract(input_file_name(), r'(\d+)\.json$', 0))\
+    .createOrReplaceTempView("delta_log")
+
+display(spark.sql(" \
+    select a.table_name, a.schema_version, a.metaData, b.commitInfo \
+    from delta_log a \
+    left join delta_log b on a.schema_version = b.schema_version AND b.commitInfo is not null\
+    WHERE a.metaData is not null and a.schema_version <> '' \
+    ORDER BY a.schema_version DESC"))
+```
+
+![image](https://github.com/user-attachments/assets/20e1d828-daec-479e-ae87-dac5c1e2a195)
+
+Next we want to use a SQL lag function in conjunction with extracting the schema string from the metaData struct to bring the previous schema and current schema on the same line. 
+
+``` a.metaData.schemaString AS current_schemaString, LAG(a.metaData.schemaString, 1) OVER(PARTITION BY a.table_name ORDER BY a.schema_version) AS prev_schemaString ```
+
+In the same step we also extract the timestamp from the commitInfo Struct by converting the value from unixtime to something human readable. Note that we retain the original structs 
+
+``` from_unixtime(b.commitInfo.timestamp / 1000) as timestamp```
+
+```Python
+# Struct Selection to access schema variances using windowing
+from pyspark.sql.functions import input_file_name, regexp_extract, col, explode, struct, from_unixtime
+
+spark.read.json("dbfs:/FileStore/tables/TraderJoesRevenue/bronze_tj_fact_revenue/_delta_log/*.json")\
+    .withColumn("table_name", regexp_extract(input_file_name(), r'/tables/TraderJoesRevenue/(.*?)/_delta_log/', 1))\
+    .withColumn("schema_version", regexp_extract(input_file_name(), r'(\d+)\.json$', 0))\
+    .createOrReplaceTempView("delta_log")
+
+#windowing function here
+df =(spark.sql(" \
+    select a.table_name, a.schema_version, from_unixtime(b.commitInfo.timestamp / 1000) as timestamp, \
+    a.metaData.schemaString AS current_schemaString, LAG(a.metaData.schemaString, 1) OVER(PARTITION BY a.table_name ORDER BY a.schema_version) AS prev_schemaString ,b.commitInfo , a.metaData  \
+    from delta_log a \
+    left join delta_log b on a.schema_version = b.schema_version AND b.commitInfo is not null\
+    WHERE a.metaData is not null and a.schema_version <> '' \
+    ORDER BY a.schema_version DESC"))
+
+display(df)
+```
+
+## 
